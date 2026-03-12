@@ -148,7 +148,7 @@ export interface WarehouseModel {
   on_behalf_of_user?: boolean;
   name?: string;  // Optional - auto-populated from warehouse API if not provided
   description?: string;
-  warehouse_id: string;
+  warehouse_id: VariableValue;
   // Authentication fields
   service_principal?: ServicePrincipalModel | string;
   client_id?: VariableValue;
@@ -370,14 +370,14 @@ export interface McpFunctionModel {
   // NOTE: 'name' is NOT part of McpFunctionModel - it's in the parent ToolModel
   transport?: "streamable_http" | "stdio";
   command?: string;
-  url?: string;
+  url?: VariableValue;
   headers?: Record<string, any>;
   args?: string[];
-  pat?: string;
+  pat?: VariableValue;
   service_principal?: ServicePrincipalModel | string;  // Can be inline or reference
-  client_id?: string;
-  client_secret?: string;
-  workspace_host?: string;
+  client_id?: VariableValue;
+  client_secret?: VariableValue;
+  workspace_host?: VariableValue;
   app?: DatabricksAppModel | string;  // Can be inline or reference to configured app
   connection?: ConnectionModel | string;  // Can be inline or reference
   functions?: SchemaModel;

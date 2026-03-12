@@ -1507,7 +1507,7 @@ function GenieRoomsPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
 // =============================================================================
 // Warehouses Panel
 // =============================================================================
-type WarehouseIdSource = 'select' | 'manual' | 'variable';
+type WarehouseIdSource = 'select' | 'manual' | 'variable' | 'env';
 
 function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClose }: PanelProps) {
   const { config, addWarehouse, updateWarehouse, removeWarehouse } = useConfigStore();
@@ -1523,6 +1523,8 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
     description: '',
     warehouse_id: '',
     warehouse_id_variable: '',
+    warehouse_id_env: '',
+    warehouse_id_env_default: '',
     on_behalf_of_user: false,
     // Authentication fields
     authMethod: 'default' as 'default' | 'service_principal' | 'oauth' | 'pat',
@@ -1544,18 +1546,34 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
   const handleEdit = (key: string) => {
     scrollToAsset(key);
     const wh = warehouses[key];
-    const warehouseId = safeString(wh.warehouse_id);
-    // Detect if the warehouse_id is a variable reference
-    const isVariableRef = safeStartsWith(warehouseId, '__REF__');
-    const variableName = isVariableRef ? warehouseId.substring(7) : '';
-    const directId = isVariableRef ? '' : warehouseId;
     
-    // Determine source: if variable ref -> variable, if matches a known warehouse -> select, else manual
     let source: WarehouseIdSource = 'manual';
-    if (isVariableRef) {
-      source = 'variable';
-    } else if (sqlWarehouses?.some(w => w.id === warehouseId)) {
-      source = 'select';
+    let directId = '';
+    let variableName = '';
+    let envName = '';
+    let envDefault = '';
+    
+    if (typeof wh.warehouse_id === 'object' && wh.warehouse_id !== null) {
+      const obj = wh.warehouse_id as unknown as Record<string, unknown>;
+      if ('env' in obj && typeof obj.env === 'string') {
+        source = 'env';
+        envName = obj.env;
+        envDefault = obj.default_value !== undefined && obj.default_value !== null ? String(obj.default_value) : '';
+      } else {
+        source = 'manual';
+        directId = getVariableDisplayValue(wh.warehouse_id);
+      }
+    } else {
+      const warehouseId = safeString(wh.warehouse_id);
+      const isVariableRef = safeStartsWith(warehouseId, '__REF__');
+      variableName = isVariableRef ? warehouseId.substring(7) : '';
+      directId = isVariableRef ? '' : warehouseId;
+      
+      if (isVariableRef) {
+        source = 'variable';
+      } else if (sqlWarehouses?.some(w => w.id === warehouseId)) {
+        source = 'select';
+      }
     }
     
     // Parse authentication data
@@ -1577,6 +1595,8 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
       description: wh.description || '',
       warehouse_id: directId,
       warehouse_id_variable: variableName,
+      warehouse_id_env: envName,
+      warehouse_id_env_default: envDefault,
       ...authData,
     });
     setEditingKey(key);
@@ -1585,9 +1605,15 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
 
   const handleSave = () => {
     // Determine the final warehouse_id value
-    let finalWarehouseId = formData.warehouse_id;
+    let finalWarehouseId: WarehouseModel['warehouse_id'] = formData.warehouse_id;
     if (warehouseIdSource === 'variable' && formData.warehouse_id_variable) {
       finalWarehouseId = `__REF__${formData.warehouse_id_variable}`;
+    } else if (warehouseIdSource === 'env' && formData.warehouse_id_env) {
+      const envObj: Record<string, unknown> = { env: formData.warehouse_id_env };
+      if (formData.warehouse_id_env_default) {
+        envObj.default_value = formData.warehouse_id_env_default;
+      }
+      finalWarehouseId = envObj as any;
     }
     
     const warehouse: WarehouseModel = {
@@ -1617,6 +1643,8 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
       description: '', 
       warehouse_id: '', 
       warehouse_id_variable: '', 
+      warehouse_id_env: '',
+      warehouse_id_env_default: '',
       on_behalf_of_user: false,
       authMethod: 'default',
       servicePrincipalRef: '',
@@ -1675,7 +1703,7 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
           <Database className="w-5 h-5 text-emerald-400" />
           <h3 className="text-lg font-semibold text-slate-100">SQL Warehouses</h3>
         </div>
-        <Button variant="secondary" size="sm" onClick={() => { setFormData({ refName: '', name: '', description: '', warehouse_id: '', warehouse_id_variable: '', on_behalf_of_user: false, authMethod: 'default', servicePrincipalRef: '', clientIdSource: 'variable', clientSecretSource: 'variable', workspaceHostSource: 'variable', patSource: 'variable', client_id: '', client_secret: '', workspace_host: '', pat: '', clientIdVariable: '', clientSecretVariable: '', workspaceHostVariable: '', patVariable: '' }); setWarehouseIdSource('select'); setEditingKey(null); setShowForm(true); }}>
+        <Button variant="secondary" size="sm" onClick={() => { setFormData({ refName: '', name: '', description: '', warehouse_id: '', warehouse_id_variable: '', warehouse_id_env: '', warehouse_id_env_default: '', on_behalf_of_user: false, authMethod: 'default', servicePrincipalRef: '', clientIdSource: 'variable', clientSecretSource: 'variable', workspaceHostSource: 'variable', patSource: 'variable', client_id: '', client_secret: '', workspace_host: '', pat: '', clientIdVariable: '', clientSecretVariable: '', workspaceHostVariable: '', patVariable: '' }); setWarehouseIdSource('select'); setEditingKey(null); setShowForm(true); }}>
           <Plus className="w-4 h-4 mr-1" />
           Add Warehouse
         </Button>
@@ -1685,11 +1713,23 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
       {Object.keys(warehouses).length > 0 && (
         <div className="space-y-2 mb-4">
           {Object.entries(warehouses).map(([key, wh]) => {
-            const warehouseId = safeString(wh.warehouse_id);
-            const isVariableRef = safeStartsWith(warehouseId, '__REF__');
-            const displayId = isVariableRef 
-              ? `$${warehouseId.substring(7)}` 
-              : `${warehouseId?.substring(0, 12)}...`;
+            const isEnvVar = typeof wh.warehouse_id === 'object' && wh.warehouse_id !== null && 'env' in (wh.warehouse_id as unknown as Record<string, unknown>);
+            const warehouseIdStr = safeString(wh.warehouse_id);
+            const isVariableRef = safeStartsWith(warehouseIdStr, '__REF__');
+            let displayId: string;
+            let displayLabel: string;
+            if (isEnvVar) {
+              const envObj = wh.warehouse_id as unknown as Record<string, unknown>;
+              displayId = `$${envObj.env}`;
+              displayLabel = 'Env: ';
+            } else if (isVariableRef) {
+              displayId = `$${warehouseIdStr.substring(7)}`;
+              displayLabel = 'Var: ';
+            } else {
+              const resolved = getVariableDisplayValue(wh.warehouse_id);
+              displayId = resolved ? `${resolved.substring(0, 12)}...` : '';
+              displayLabel = 'ID: ';
+            }
             return (
               <div 
                 key={key} 
@@ -1701,7 +1741,7 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
                   <div>
                     <p className="font-medium text-slate-200">{key}</p>
                     <p className="text-xs text-slate-500">
-                      {wh.name} • {isVariableRef ? 'Var: ' : 'ID: '}{displayId}
+                      {wh.name} • {displayLabel}{displayId}
                     </p>
                   </div>
                 </div>
@@ -1752,7 +1792,7 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
                   type="button"
                   onClick={() => {
                     setWarehouseIdSource('select');
-                    setFormData({ ...formData, warehouse_id_variable: '' });
+                    setFormData({ ...formData, warehouse_id_variable: '', warehouse_id_env: '', warehouse_id_env_default: '' });
                   }}
                   className={`px-2 py-1 text-xs rounded ${
                     warehouseIdSource === 'select' ? 'bg-blue-500/30 text-blue-300' : 'bg-slate-700 text-slate-400'
@@ -1764,7 +1804,7 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
                   type="button"
                   onClick={() => {
                     setWarehouseIdSource('manual');
-                    setFormData({ ...formData, warehouse_id_variable: '' });
+                    setFormData({ ...formData, warehouse_id_variable: '', warehouse_id_env: '', warehouse_id_env_default: '' });
                   }}
                   className={`px-2 py-1 text-xs rounded ${
                     warehouseIdSource === 'manual' ? 'bg-blue-500/30 text-blue-300' : 'bg-slate-700 text-slate-400'
@@ -1776,7 +1816,7 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
                   type="button"
                   onClick={() => {
                     setWarehouseIdSource('variable');
-                    setFormData({ ...formData, warehouse_id: '' });
+                    setFormData({ ...formData, warehouse_id: '', warehouse_id_env: '', warehouse_id_env_default: '' });
                   }}
                   className={`px-2 py-1 text-xs rounded flex items-center space-x-1 ${
                     warehouseIdSource === 'variable' ? 'bg-purple-500/30 text-purple-300' : 'bg-slate-700 text-slate-400'
@@ -1784,6 +1824,19 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
                 >
                   <Key className="w-3 h-3" />
                   <span>Variable</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setWarehouseIdSource('env');
+                    setFormData({ ...formData, warehouse_id: '', warehouse_id_variable: '' });
+                  }}
+                  className={`px-2 py-1 text-xs rounded flex items-center space-x-1 ${
+                    warehouseIdSource === 'env' ? 'bg-green-500/30 text-green-300' : 'bg-slate-700 text-slate-400'
+                  }`}
+                >
+                  <CloudCog className="w-3 h-3" />
+                  <span>Env</span>
                 </button>
               </div>
             </div>
@@ -1887,6 +1940,27 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
                 </p>
               </div>
             )}
+
+            {warehouseIdSource === 'env' && (
+              <div className="space-y-2">
+                <Input
+                  label="Environment Variable"
+                  value={formData.warehouse_id_env}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, warehouse_id_env: e.target.value })}
+                  placeholder="DATABRICKS_WAREHOUSE_ID"
+                  required
+                />
+                <Input
+                  label="Default Value (optional)"
+                  value={formData.warehouse_id_env_default}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, warehouse_id_env_default: e.target.value })}
+                  placeholder="abc123def456"
+                />
+                <p className="text-xs text-slate-500">
+                  The warehouse ID will be read from this environment variable at runtime. If not set, the default value is used.
+                </p>
+              </div>
+            )}
           </div>
           
           <Input
@@ -1930,6 +2004,7 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
                 (warehouseIdSource === 'select' && !formData.warehouse_id) ||
                 (warehouseIdSource === 'manual' && !formData.warehouse_id) ||
                 (warehouseIdSource === 'variable' && !formData.warehouse_id_variable) ||
+                (warehouseIdSource === 'env' && !formData.warehouse_id_env) ||
                 isRefNameDuplicate(formData.refName, config, editingKey)
               }
             >

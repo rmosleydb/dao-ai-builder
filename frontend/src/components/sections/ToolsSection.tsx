@@ -753,9 +753,16 @@ export default function ToolsSection() {
     return null;
   };
 
-  const findConfiguredWarehouse = (warehouse: { warehouse_id?: string }): string | null => {
+  const findConfiguredWarehouse = (warehouse: { warehouse_id?: unknown }): string | null => {
     for (const [key, wh] of Object.entries(configuredWarehouses)) {
-      if (warehouse.warehouse_id && wh.warehouse_id === warehouse.warehouse_id) return key;
+      if (!warehouse.warehouse_id) continue;
+      if (typeof warehouse.warehouse_id === 'string' && typeof wh.warehouse_id === 'string') {
+        if (warehouse.warehouse_id === wh.warehouse_id) return key;
+      } else {
+        const a = getVariableDisplayValue(warehouse.warehouse_id);
+        const b = getVariableDisplayValue(wh.warehouse_id);
+        if (a && a === b) return key;
+      }
     }
     return null;
   };
@@ -913,26 +920,22 @@ export default function ToolsSection() {
     // Add credentials if enabled
     if (mcpForm.useCredentials) {
       if (mcpForm.credentialsMode === 'service_principal' && mcpForm.servicePrincipalRef) {
-        // Use configured service principal reference
         base.service_principal = `*${mcpForm.servicePrincipalRef}` as any;
       } else if (mcpForm.credentialsMode === 'manual') {
-        // Client ID
         if (mcpForm.clientIdSource === 'variable' && mcpForm.clientIdVar) {
-          base.client_id = `*${mcpForm.clientIdVar}` as any; // YAML anchor reference
+          base.client_id = `*${mcpForm.clientIdVar}`;
         } else if (mcpForm.clientIdSource === 'manual' && mcpForm.clientIdManual) {
-          base.client_id = mcpForm.clientIdManual as any;
+          base.client_id = mcpForm.clientIdManual;
         }
-        // Client Secret
         if (mcpForm.clientSecretSource === 'variable' && mcpForm.clientSecretVar) {
-          base.client_secret = `*${mcpForm.clientSecretVar}` as any;
+          base.client_secret = `*${mcpForm.clientSecretVar}`;
         } else if (mcpForm.clientSecretSource === 'manual' && mcpForm.clientSecretManual) {
-          base.client_secret = mcpForm.clientSecretManual as any;
+          base.client_secret = mcpForm.clientSecretManual;
         }
-        // Workspace Host (optional) - only include if a value is provided
         if (mcpForm.workspaceHostSource === 'variable' && mcpForm.workspaceHostVar) {
-          base.workspace_host = `*${mcpForm.workspaceHostVar}` as any;
+          base.workspace_host = `*${mcpForm.workspaceHostVar}`;
         } else if (mcpForm.workspaceHostSource === 'manual' && mcpForm.workspaceHostManual) {
-          base.workspace_host = mcpForm.workspaceHostManual as any;
+          base.workspace_host = mcpForm.workspaceHostManual;
         }
       }
     }
@@ -1829,14 +1832,13 @@ export default function ToolsSection() {
             genieLruCacheWarehouseRefName = lruParams.warehouse.replace('__REF__', '');
             genieLruCacheWarehouseSource = 'configured';
           } else if (typeof lruParams.warehouse === 'object' && lruParams.warehouse !== null) {
-            const wh = lruParams.warehouse as { warehouse_id?: string };
-            // Try to find a matching configured warehouse
+            const wh = lruParams.warehouse as { warehouse_id?: unknown };
             const matchingKey = findConfiguredWarehouse(wh);
             if (matchingKey) {
               genieLruCacheWarehouseRefName = matchingKey;
               genieLruCacheWarehouseSource = 'configured';
             } else {
-              genieLruCacheWarehouseId = wh.warehouse_id || '';
+              genieLruCacheWarehouseId = getVariableDisplayValue(wh.warehouse_id);
               genieLruCacheWarehouseSource = 'select';
             }
           }
@@ -1976,14 +1978,13 @@ export default function ToolsSection() {
             genieSemanticCacheWarehouseRefName = semParams.warehouse.replace('__REF__', '');
             genieSemanticCacheWarehouseSource = 'configured';
           } else if (typeof semParams.warehouse === 'object' && semParams.warehouse !== null) {
-            const wh = semParams.warehouse as { warehouse_id?: string };
-            // Try to find a matching configured warehouse
+            const wh = semParams.warehouse as { warehouse_id?: unknown };
             const matchingKey = findConfiguredWarehouse(wh);
             if (matchingKey) {
               genieSemanticCacheWarehouseRefName = matchingKey;
               genieSemanticCacheWarehouseSource = 'configured';
             } else {
-              genieSemanticCacheWarehouseId = wh.warehouse_id || '';
+              genieSemanticCacheWarehouseId = getVariableDisplayValue(wh.warehouse_id);
               genieSemanticCacheWarehouseSource = 'select';
             }
           }
@@ -2072,13 +2073,13 @@ export default function ToolsSection() {
             genieInMemoryCacheWarehouseRefName = inMemParams.warehouse.replace('__REF__', '');
             genieInMemoryCacheWarehouseSource = 'configured';
           } else if (typeof inMemParams.warehouse === 'object' && inMemParams.warehouse !== null) {
-            const wh = inMemParams.warehouse as { warehouse_id?: string };
+            const wh = inMemParams.warehouse as { warehouse_id?: unknown };
             const matchingKey = findConfiguredWarehouse(wh);
             if (matchingKey) {
               genieInMemoryCacheWarehouseRefName = matchingKey;
               genieInMemoryCacheWarehouseSource = 'configured';
             } else {
-              genieInMemoryCacheWarehouseId = wh.warehouse_id || '';
+              genieInMemoryCacheWarehouseId = getVariableDisplayValue(wh.warehouse_id);
               genieInMemoryCacheWarehouseSource = 'select';
             }
           }
@@ -2482,16 +2483,25 @@ export default function ToolsSection() {
             appName: appName,
           }));
         } else if (mcpFunc.url) {
-          // Direct URL source
-          const urlStr = typeof mcpFunc.url === 'string' ? mcpFunc.url : '';
-          const isUrlVariable = urlStr.startsWith('__REF__');
-          setMcpForm(prev => ({
-            ...prev,
-            sourceType: 'url',
-            urlSource: isUrlVariable ? 'variable' : 'manual',
-            url: isUrlVariable ? '' : urlStr,
-            urlVariable: isUrlVariable ? urlStr.substring(7) : '',
-          }));
+          if (typeof mcpFunc.url === 'string') {
+            const isUrlVariable = mcpFunc.url.startsWith('__REF__');
+            setMcpForm(prev => ({
+              ...prev,
+              sourceType: 'url',
+              urlSource: isUrlVariable ? 'variable' : 'manual',
+              url: isUrlVariable ? '' : mcpFunc.url as string,
+              urlVariable: isUrlVariable ? (mcpFunc.url as string).substring(7) : '',
+            }));
+          } else {
+            const resolved = getVariableDisplayValue(mcpFunc.url);
+            setMcpForm(prev => ({
+              ...prev,
+              sourceType: 'url',
+              urlSource: 'manual',
+              url: resolved,
+              urlVariable: '',
+            }));
+          }
         }
         
         // Load include_tools and exclude_tools if present

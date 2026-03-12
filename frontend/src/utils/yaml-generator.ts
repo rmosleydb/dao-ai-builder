@@ -223,13 +223,6 @@ function findMatchingSchema(value: unknown): string | null {
 }
 
 /**
- * Safely convert a value to string, returning empty string for objects/undefined.
- */
-function safeString(value: unknown): string {
-  return typeof value === 'string' ? value : '';
-}
-
-/**
  * Add YAML anchors (&anchor_name) to resource definitions.
  * This allows resources to be referenced later using aliases (*anchor_name).
  * 
@@ -1910,11 +1903,14 @@ export function generateYAML(config: AppConfig): string {
     if (config.resources!.warehouses && Object.keys(config.resources!.warehouses).length > 0) {
       yamlConfig.resources.warehouses = {};
       Object.entries(config.resources!.warehouses).forEach(([key, warehouse]) => {
-        // Check if warehouse_id is a variable reference (starts with *)
-        const warehouseIdStr = safeString(warehouse.warehouse_id);
-        let warehouseIdValue: string = warehouseIdStr;
-        if (safeStartsWith(warehouseIdStr, '*')) {
-          warehouseIdValue = createReference(warehouseIdStr.substring(1));
+        let warehouseIdValue: unknown = warehouse.warehouse_id;
+
+        if (typeof warehouse.warehouse_id === 'string') {
+          if (safeStartsWith(warehouse.warehouse_id, '*')) {
+            warehouseIdValue = createReference(warehouse.warehouse_id.substring(1));
+          }
+        } else if (typeof warehouse.warehouse_id === 'object' && warehouse.warehouse_id !== null) {
+          warehouseIdValue = warehouse.warehouse_id;
         }
         
         yamlConfig.resources.warehouses[key] = {

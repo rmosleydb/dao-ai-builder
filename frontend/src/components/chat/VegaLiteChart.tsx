@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState } from 'react';
-import embed, { VisualizationSpec } from 'vega-embed';
+import embed, { VisualizationSpec, Result } from 'vega-embed';
 import { BarChart3, AlertCircle } from 'lucide-react';
 
 interface VegaLiteChartProps {
@@ -8,19 +8,37 @@ interface VegaLiteChartProps {
 
 export default function VegaLiteChart({ spec }: VegaLiteChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const resultRef = useRef<Result | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
 
     setError(null);
+
+    if (resultRef.current) {
+      resultRef.current.finalize();
+      resultRef.current = null;
+    }
+
     embed(containerRef.current, spec, {
       actions: { export: true, source: false, compiled: false, editor: false },
       renderer: 'svg',
       theme: 'dark',
-    }).catch((err) => {
-      setError(err instanceof Error ? err.message : 'Failed to render chart');
-    });
+    })
+      .then((result) => {
+        resultRef.current = result;
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : 'Failed to render chart');
+      });
+
+    return () => {
+      if (resultRef.current) {
+        resultRef.current.finalize();
+        resultRef.current = null;
+      }
+    };
   }, [spec]);
 
   if (error) {
@@ -33,12 +51,12 @@ export default function VegaLiteChart({ spec }: VegaLiteChartProps) {
   }
 
   return (
-    <div className="mt-2 border border-slate-700 rounded-lg overflow-hidden bg-slate-900/50">
+    <div className="mt-2 w-full border border-slate-700 rounded-lg overflow-hidden bg-slate-900/50">
       <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-slate-700/50 bg-slate-800/30">
         <BarChart3 className="w-3.5 h-3.5 text-cyan-400" />
         <span className="text-[10px] text-slate-400 font-medium">Visualization</span>
       </div>
-      <div ref={containerRef} className="p-2" />
+      <div ref={containerRef} className="w-full p-2" />
     </div>
   );
 }
