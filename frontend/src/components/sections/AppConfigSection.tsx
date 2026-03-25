@@ -9,7 +9,7 @@ import Textarea from '../ui/Textarea';
 import Card from '../ui/Card';
 import Badge from '../ui/Badge';
 import MultiSelect from '../ui/MultiSelect';
-import { LogLevel, VariableValue } from '@/types/dao-ai-types';
+import { LogLevel, VariableValue, TraceLocationModel, MonitoringModel } from '@/types/dao-ai-types';
 import { clsx } from 'clsx';
 import { normalizeRefName } from '@/utils/name-utils';
 
@@ -115,6 +115,7 @@ export default function AppConfigSection() {
   const llms = config.resources?.llms || {};
   const tools = config.tools || {};
   const memory = config.memory;
+  const warehouses = config.resources?.warehouses || {};
 
   // App settings form
   const [formData, setFormData] = useState(() => {
@@ -264,9 +265,10 @@ export default function AppConfigSection() {
     config.app?.orchestration?.supervisor ? 'supervisor' :
     config.app?.orchestration?.swarm ? 'swarm' : 'none'
   );
-  const [supervisorPrompt, setSupervisorPrompt] = useState(
-    config.app?.orchestration?.supervisor?.prompt || ''
-  );
+  const [supervisorPrompt, setSupervisorPrompt] = useState<string>(() => {
+    const p = config.app?.orchestration?.supervisor?.prompt;
+    return typeof p === 'string' ? p : '';
+  });
   
   // AI generation state for supervisor prompt
   const [isGeneratingSupervisorPrompt, setIsGeneratingSupervisorPrompt] = useState(false);
@@ -397,6 +399,64 @@ export default function AppConfigSection() {
   });
   const [chatHistoryMaxTokensBeforeSummary, setChatHistoryMaxTokensBeforeSummary] = useState(app?.chat_history?.max_tokens_before_summary || 20480);
   const [chatHistoryMaxMessagesBeforeSummary, setChatHistoryMaxMessagesBeforeSummary] = useState(app?.chat_history?.max_messages_before_summary || 10);
+
+  // Trace Location state
+  const [enableTraceLocation, setEnableTraceLocation] = useState(!!app?.trace_location);
+  const [traceLocationSchemaKey, setTraceLocationSchemaKey] = useState<string>(() => {
+    if (app?.trace_location?.schema) {
+      const tl = app.trace_location.schema;
+      const tlCat = getVariableDisplayValue(tl.catalog_name);
+      const tlSch = getVariableDisplayValue(tl.schema_name);
+      const matched = Object.entries(schemas).find(([, s]) =>
+        getVariableDisplayValue(s.catalog_name) === tlCat &&
+        getVariableDisplayValue(s.schema_name) === tlSch
+      );
+      return matched ? matched[0] : '';
+    }
+    return '';
+  });
+  type TraceWarehouseSource = 'configured' | 'manual';
+  const [traceWarehouseSource, setTraceWarehouseSource] = useState<TraceWarehouseSource>(() => {
+    if (app?.trace_location?.warehouse) {
+      if (typeof app.trace_location.warehouse === 'string') return 'manual';
+      const whName = app.trace_location.warehouse.name;
+      if (whName && Object.values(warehouses).some(w => w.name === whName)) return 'configured';
+    }
+    return Object.keys(warehouses).length > 0 ? 'configured' : 'manual';
+  });
+  const [traceWarehouseKey, setTraceWarehouseKey] = useState<string>(() => {
+    if (app?.trace_location?.warehouse && typeof app.trace_location.warehouse !== 'string') {
+      const whName = app.trace_location.warehouse.name;
+      const matched = Object.entries(warehouses).find(([, w]) => w.name === whName);
+      return matched ? matched[0] : '';
+    }
+    return '';
+  });
+  const [traceWarehouseId, setTraceWarehouseId] = useState<string>(() => {
+    if (app?.trace_location?.warehouse && typeof app.trace_location.warehouse === 'string') {
+      return app.trace_location.warehouse;
+    }
+    return '';
+  });
+
+  // Monitoring state
+  const [enableMonitoring, setEnableMonitoring] = useState(!!app?.monitoring);
+  const [monitoringSampleRate, setMonitoringSampleRate] = useState(app?.monitoring?.sample_rate ?? 1.0);
+  const [monitoringGuidelinesSampleRate, setMonitoringGuidelinesSampleRate] = useState(app?.monitoring?.guidelines_sample_rate ?? 0.5);
+  const BUILT_IN_SCORERS = ['safety', 'completeness', 'relevance_to_query', 'tool_call_efficiency'];
+  const [monitoringScorers, setMonitoringScorers] = useState<string[]>(() => {
+    if (app?.monitoring?.scorers) {
+      return app.monitoring.scorers
+        .filter((s): s is string => typeof s === 'string');
+    }
+    return [];
+  });
+  const [newScorerValue, setNewScorerValue] = useState('');
+  const [monitoringGuidelines, setMonitoringGuidelines] = useState<{ name: string; guidelines: string[] }[]>(
+    () => app?.monitoring?.guidelines || []
+  );
+  const [newGuidelineName, setNewGuidelineName] = useState('');
+  const [newGuidelineText, setNewGuidelineText] = useState('');
 
   // Track whether initial sync from config has completed.
   // After the first sync, local handoff/orchestration state is managed by the user
@@ -745,7 +805,8 @@ export default function AppConfigSection() {
       }
       
       // Sync supervisor prompt
-      setSupervisorPrompt(app?.orchestration?.supervisor?.prompt || '');
+      const syncedPrompt = app?.orchestration?.supervisor?.prompt;
+      setSupervisorPrompt(typeof syncedPrompt === 'string' ? syncedPrompt : '');
       
       // Sync supervisor tools
       const existingSupervisorTools = app?.orchestration?.supervisor?.tools;
@@ -1143,6 +1204,34 @@ export default function AppConfigSection() {
       }
     }
 
+    // Build trace_location config
+    let traceLocation: TraceLocationModel | undefined = undefined;
+    if (enableTraceLocation && traceLocationSchemaKey && schemas[traceLocationSchemaKey]) {
+      let warehouseValue: any;
+      if (traceWarehouseSource === 'configured' && traceWarehouseKey) {
+        warehouseValue = warehouses[traceWarehouseKey];
+      } else if (traceWarehouseSource === 'manual' && traceWarehouseId) {
+        warehouseValue = traceWarehouseId;
+      }
+      if (warehouseValue) {
+        traceLocation = {
+          schema: schemas[traceLocationSchemaKey],
+          warehouse: warehouseValue,
+        };
+      }
+    }
+
+    // Build monitoring config
+    let monitoring: MonitoringModel | undefined = undefined;
+    if (enableMonitoring) {
+      monitoring = {
+        sample_rate: monitoringSampleRate,
+        ...(monitoringScorers.length > 0 && { scorers: monitoringScorers }),
+        ...(monitoringGuidelinesSampleRate !== 0.5 && { guidelines_sample_rate: monitoringGuidelinesSampleRate }),
+        ...(monitoringGuidelines.length > 0 && { guidelines: monitoringGuidelines }),
+      };
+    }
+
     updateApp({
       name: formData.name,
       description: formData.description || undefined,
@@ -1153,6 +1242,8 @@ export default function AppConfigSection() {
         name: formData.modelName,
         ...(selectedSchema && { schema: selectedSchema }),
       },
+      trace_location: traceLocation,
+      monitoring,
       workload_size: formData.workloadSize as 'Small' | 'Medium' | 'Large',
       scale_to_zero: formData.scaleToZero,
       deployment_target: formData.deploymentTarget as 'model_serving' | 'apps',
@@ -2231,6 +2322,311 @@ export default function AppConfigSection() {
                     <li>The summary replaces older messages, reducing overall token usage</li>
                   </ul>
                 </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </Card>
+
+      {/* Trace Location */}
+      <Card className="space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <Layers className="w-5 h-5 text-slate-400" />
+            <h3 className="font-medium text-white">Trace Location</h3>
+          </div>
+          <label className="flex items-center space-x-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={enableTraceLocation}
+              onChange={(e) => setEnableTraceLocation(e.target.checked)}
+              className="rounded border-slate-600 text-violet-500 focus:ring-violet-500 focus:ring-offset-slate-900"
+            />
+            <span className="text-xs text-slate-400">Enable</span>
+          </label>
+        </div>
+        <p className="text-sm text-slate-400">
+          Store MLflow traces in Unity Catalog Delta tables for production observability
+        </p>
+
+        {enableTraceLocation && (
+          <div className="space-y-4 p-4 bg-slate-800/30 rounded-lg border border-slate-700/50">
+            <Select
+              label="Schema"
+              value={traceLocationSchemaKey}
+              onChange={(e) => setTraceLocationSchemaKey(e.target.value)}
+              options={[
+                { value: '', label: 'Select a configured schema...' },
+                ...Object.entries(schemas).map(([key, s]) => ({
+                  value: key,
+                  label: `${key} (${getVariableDisplayValue(s.catalog_name)}.${getVariableDisplayValue(s.schema_name)})`,
+                })),
+              ]}
+              hint="Unity Catalog schema where OTEL trace tables are stored"
+              required
+            />
+
+            {Object.keys(schemas).length === 0 && (
+              <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 text-amber-400 text-sm">
+                No schemas configured. Add a schema in the Schemas section first.
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-slate-300">Warehouse</label>
+              <div className="flex items-center space-x-2 mb-2">
+                <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setTraceWarehouseSource('configured')}
+                    className={`px-2 py-0.5 text-[10px] rounded-md font-medium transition-all duration-150 ${
+                      traceWarehouseSource === 'configured'
+                        ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                        : 'text-slate-400 border border-transparent hover:text-slate-300'
+                    }`}
+                  >
+                    Configured
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTraceWarehouseSource('manual')}
+                    className={`px-2 py-0.5 text-[10px] rounded-md font-medium transition-all duration-150 ${
+                      traceWarehouseSource === 'manual'
+                        ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                        : 'text-slate-400 border border-transparent hover:text-slate-300'
+                    }`}
+                  >
+                    Manual
+                  </button>
+                </div>
+              </div>
+              {traceWarehouseSource === 'configured' ? (
+                <Select
+                  value={traceWarehouseKey}
+                  onChange={(e) => setTraceWarehouseKey(e.target.value)}
+                  options={[
+                    { value: '', label: 'Select a configured warehouse...' },
+                    ...Object.entries(warehouses).map(([key, wh]) => ({
+                      value: key,
+                      label: `${key}${wh.name ? ` (${wh.name})` : ''}`,
+                    })),
+                  ]}
+                  hint="Reference a warehouse from Resources"
+                />
+              ) : (
+                <Input
+                  value={traceWarehouseId}
+                  onChange={(e) => setTraceWarehouseId(e.target.value)}
+                  placeholder="Enter warehouse ID..."
+                  hint="SQL warehouse ID for creating views and querying traces"
+                />
+              )}
+            </div>
+          </div>
+        )}
+      </Card>
+
+      {/* Monitoring */}
+      <Card className="space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <Settings className="w-5 h-5 text-slate-400" />
+            <h3 className="font-medium text-white">Monitoring</h3>
+          </div>
+          <label className="flex items-center space-x-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={enableMonitoring}
+              onChange={(e) => setEnableMonitoring(e.target.checked)}
+              className="rounded border-slate-600 text-violet-500 focus:ring-violet-500 focus:ring-offset-slate-900"
+            />
+            <span className="text-xs text-slate-400">Enable</span>
+          </label>
+        </div>
+        <p className="text-sm text-slate-400">
+          Configure production monitoring with MLflow scorers and evaluation guidelines
+        </p>
+
+        {enableMonitoring && (
+          <div className="space-y-4 p-4 bg-slate-800/30 rounded-lg border border-slate-700/50">
+            <div className="grid grid-cols-2 gap-4">
+              <Input
+                label="Sample Rate"
+                type="number"
+                min={0}
+                max={1}
+                step={0.1}
+                value={monitoringSampleRate}
+                onChange={(e) => setMonitoringSampleRate(parseFloat(e.target.value) || 1.0)}
+                hint="Sampling rate for built-in scorers (0.0 - 1.0)"
+              />
+              <Input
+                label="Guidelines Sample Rate"
+                type="number"
+                min={0}
+                max={1}
+                step={0.1}
+                value={monitoringGuidelinesSampleRate}
+                onChange={(e) => setMonitoringGuidelinesSampleRate(parseFloat(e.target.value) || 0.5)}
+                hint="Sampling rate for guideline scorers (0.0 - 1.0)"
+              />
+            </div>
+
+            {/* Scorers */}
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-slate-300">Scorers</label>
+              <p className="text-xs text-slate-500">Select built-in scorers or add custom scorer names</p>
+              <div className="flex flex-wrap gap-2">
+                {BUILT_IN_SCORERS.map(scorer => (
+                  <button
+                    key={scorer}
+                    type="button"
+                    onClick={() => {
+                      if (monitoringScorers.includes(scorer)) {
+                        setMonitoringScorers(monitoringScorers.filter(s => s !== scorer));
+                      } else {
+                        setMonitoringScorers([...monitoringScorers, scorer]);
+                      }
+                    }}
+                    className={`px-2.5 py-1 text-xs rounded-lg transition-colors ${
+                      monitoringScorers.includes(scorer)
+                        ? 'bg-emerald-500/30 text-emerald-300 border border-emerald-500/50'
+                        : 'bg-slate-700 text-slate-400 border border-slate-600 hover:border-slate-500'
+                    }`}
+                  >
+                    {scorer}
+                  </button>
+                ))}
+              </div>
+              {monitoringScorers.filter(s => !BUILT_IN_SCORERS.includes(s)).length > 0 && (
+                <div className="flex flex-wrap gap-2 mt-1">
+                  {monitoringScorers.filter(s => !BUILT_IN_SCORERS.includes(s)).map(scorer => (
+                    <span key={scorer} className="inline-flex items-center px-2 py-1 bg-blue-500/20 text-blue-300 rounded text-xs">
+                      {scorer}
+                      <button
+                        type="button"
+                        onClick={() => setMonitoringScorers(monitoringScorers.filter(s => s !== scorer))}
+                        className="ml-1.5 hover:text-red-300"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div className="flex items-center space-x-2">
+                <Input
+                  value={newScorerValue}
+                  onChange={(e) => setNewScorerValue(e.target.value)}
+                  placeholder="Add custom scorer..."
+                  className="flex-1"
+                />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    if (newScorerValue && !monitoringScorers.includes(newScorerValue)) {
+                      setMonitoringScorers([...monitoringScorers, newScorerValue]);
+                      setNewScorerValue('');
+                    }
+                  }}
+                  disabled={!newScorerValue}
+                >
+                  Add
+                </Button>
+              </div>
+            </div>
+
+            {/* Guidelines */}
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-slate-300">Guidelines</label>
+              <p className="text-xs text-slate-500">Named sets of evaluation guidelines for quality monitoring</p>
+              
+              {monitoringGuidelines.map((guideline, gIdx) => (
+                <div key={gIdx} className="p-3 bg-slate-800/50 rounded-lg border border-slate-700 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium text-blue-400">{guideline.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => setMonitoringGuidelines(monitoringGuidelines.filter((_, i) => i !== gIdx))}
+                      className="text-slate-400 hover:text-red-400"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <ul className="space-y-1">
+                    {guideline.guidelines.map((text, tIdx) => (
+                      <li key={tIdx} className="flex items-start space-x-2 text-xs text-slate-400">
+                        <span className="text-slate-600 mt-0.5">-</span>
+                        <span className="flex-1">{text}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const updated = [...monitoringGuidelines];
+                            updated[gIdx] = {
+                              ...updated[gIdx],
+                              guidelines: updated[gIdx].guidelines.filter((_, i) => i !== tIdx),
+                            };
+                            setMonitoringGuidelines(updated);
+                          }}
+                          className="text-slate-600 hover:text-red-400 flex-shrink-0"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="flex items-center space-x-2">
+                    <Input
+                      value={newGuidelineText}
+                      onChange={(e) => setNewGuidelineText(e.target.value)}
+                      placeholder="Add a guideline..."
+                      className="flex-1"
+                    />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        if (newGuidelineText) {
+                          const updated = [...monitoringGuidelines];
+                          updated[gIdx] = {
+                            ...updated[gIdx],
+                            guidelines: [...updated[gIdx].guidelines, newGuidelineText],
+                          };
+                          setMonitoringGuidelines(updated);
+                          setNewGuidelineText('');
+                        }
+                      }}
+                      disabled={!newGuidelineText}
+                    >
+                      Add
+                    </Button>
+                  </div>
+                </div>
+              ))}
+
+              <div className="flex items-end space-x-2">
+                <div className="flex-1">
+                  <Input
+                    label="New Guideline Set Name"
+                    value={newGuidelineName}
+                    onChange={(e) => setNewGuidelineName(e.target.value)}
+                    placeholder="e.g., response_quality"
+                  />
+                </div>
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    if (newGuidelineName) {
+                      setMonitoringGuidelines([...monitoringGuidelines, { name: newGuidelineName, guidelines: [] }]);
+                      setNewGuidelineName('');
+                    }
+                  }}
+                  disabled={!newGuidelineName}
+                >
+                  <Plus className="w-4 h-4 mr-1" />
+                  Add Set
+                </Button>
               </div>
             </div>
           </div>

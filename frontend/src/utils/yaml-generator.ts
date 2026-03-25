@@ -1840,22 +1840,22 @@ export function generateYAML(config: AppConfig): string {
     if (config.resources!.genie_rooms && Object.keys(config.resources!.genie_rooms).length > 0) {
       yamlConfig.resources.genie_rooms = {};
       Object.entries(config.resources!.genie_rooms).forEach(([key, room]) => {
-        // Handle space_id which can be a string, variable reference, or VariableValue object
-        let spaceIdValue: unknown = room.space_id;
+        let spaceIdValue: unknown = undefined;
         
-        if (typeof room.space_id === 'string') {
-          // String value - check if it's a variable reference (starts with *)
-          if (safeStartsWith(room.space_id, '*')) {
-            spaceIdValue = createReference(room.space_id.substring(1));
-          }
-        } else if (typeof room.space_id === 'object' && room.space_id !== null) {
-          // VariableValue object - pass through as-is (env, secret, primitive)
+        if (room.space_id) {
           spaceIdValue = room.space_id;
+          if (typeof room.space_id === 'string') {
+            if (safeStartsWith(room.space_id, '*')) {
+              spaceIdValue = createReference(room.space_id.substring(1));
+            }
+          } else if (typeof room.space_id === 'object' && room.space_id !== null) {
+            spaceIdValue = room.space_id;
+          }
         }
         
         yamlConfig.resources.genie_rooms[key] = {
           name: room.name,
-          space_id: spaceIdValue,
+          ...(spaceIdValue !== undefined && { space_id: spaceIdValue }),
           ...(room.description && { description: room.description }),
           ...(room.on_behalf_of_user !== undefined && { on_behalf_of_user: room.on_behalf_of_user }),
           ...formatResourceAuth(room, `resources.genie_rooms.${key}`),
@@ -1903,19 +1903,22 @@ export function generateYAML(config: AppConfig): string {
     if (config.resources!.warehouses && Object.keys(config.resources!.warehouses).length > 0) {
       yamlConfig.resources.warehouses = {};
       Object.entries(config.resources!.warehouses).forEach(([key, warehouse]) => {
-        let warehouseIdValue: unknown = warehouse.warehouse_id;
+        let warehouseIdValue: unknown = undefined;
 
-        if (typeof warehouse.warehouse_id === 'string') {
-          if (safeStartsWith(warehouse.warehouse_id, '*')) {
-            warehouseIdValue = createReference(warehouse.warehouse_id.substring(1));
-          }
-        } else if (typeof warehouse.warehouse_id === 'object' && warehouse.warehouse_id !== null) {
+        if (warehouse.warehouse_id) {
           warehouseIdValue = warehouse.warehouse_id;
+          if (typeof warehouse.warehouse_id === 'string') {
+            if (safeStartsWith(warehouse.warehouse_id, '*')) {
+              warehouseIdValue = createReference(warehouse.warehouse_id.substring(1));
+            }
+          } else if (typeof warehouse.warehouse_id === 'object' && warehouse.warehouse_id !== null) {
+            warehouseIdValue = warehouse.warehouse_id;
+          }
         }
         
         yamlConfig.resources.warehouses[key] = {
           name: warehouse.name,
-          warehouse_id: warehouseIdValue,
+          ...(warehouseIdValue !== undefined && { warehouse_id: warehouseIdValue }),
           ...(warehouse.description && { description: warehouse.description }),
           ...(warehouse.on_behalf_of_user !== undefined && { on_behalf_of_user: warehouse.on_behalf_of_user }),
           ...formatResourceAuth(warehouse, `resources.warehouses.${key}`),
@@ -2158,19 +2161,34 @@ export function generateYAML(config: AppConfig): string {
     });
   }
 
-  // Guardrails
+  // Guardrails (dual-mode: LLM Judge or MLflow Scorer)
   if (config.guardrails && Object.keys(config.guardrails).length > 0) {
     const definedLLMs = config.resources?.llms || {};
     yamlConfig.guardrails = {};
     Object.entries(config.guardrails).forEach(([key, guardrail]) => {
-      yamlConfig.guardrails[key] = {
-        name: guardrail.name,
-        model: formatModelReference(guardrail.model, definedLLMs, `guardrails.${key}.model`),
-        prompt: guardrail.prompt,
-        ...(guardrail.num_retries !== undefined && { num_retries: guardrail.num_retries }),
-        ...(guardrail.fail_open !== undefined && { fail_open: guardrail.fail_open }),
-        ...(guardrail.max_context_length !== undefined && { max_context_length: guardrail.max_context_length }),
-      };
+      const isScorer = !!guardrail.scorer;
+      if (isScorer) {
+        yamlConfig.guardrails[key] = {
+          name: guardrail.name,
+          scorer: guardrail.scorer,
+          ...(guardrail.scorer_args && Object.keys(guardrail.scorer_args).length > 0 && { scorer_args: guardrail.scorer_args }),
+          ...(guardrail.hub && { hub: guardrail.hub }),
+          ...(guardrail.num_retries !== undefined && { num_retries: guardrail.num_retries }),
+          ...(guardrail.fail_on_error !== undefined && { fail_on_error: guardrail.fail_on_error }),
+          ...(guardrail.max_context_length !== undefined && { max_context_length: guardrail.max_context_length }),
+          ...(guardrail.apply_to && guardrail.apply_to !== 'both' && { apply_to: guardrail.apply_to }),
+        };
+      } else {
+        yamlConfig.guardrails[key] = {
+          name: guardrail.name,
+          ...(guardrail.model && { model: formatModelReference(guardrail.model, definedLLMs, `guardrails.${key}.model`) }),
+          ...(guardrail.prompt && { prompt: guardrail.prompt }),
+          ...(guardrail.num_retries !== undefined && { num_retries: guardrail.num_retries }),
+          ...(guardrail.fail_on_error !== undefined && { fail_on_error: guardrail.fail_on_error }),
+          ...(guardrail.max_context_length !== undefined && { max_context_length: guardrail.max_context_length }),
+          ...(guardrail.apply_to && guardrail.apply_to !== 'both' && { apply_to: guardrail.apply_to }),
+        };
+      }
     });
   }
 
@@ -2718,6 +2736,88 @@ export function generateYAML(config: AppConfig): string {
         }),
       };
     }
+
+    // Format trace_location
+    if (config.app.trace_location) {
+      const definedSchemas = config.schemas || {};
+      const definedWarehouses = config.resources?.warehouses || {};
+      const traceLocationValue: Record<string, any> = {};
+      
+      traceLocationValue.schema = formatSchemaReference(
+        config.app.trace_location.schema, definedSchemas, 'app.trace_location.schema'
+      );
+      
+      const tlWarehouse = config.app.trace_location.warehouse;
+      if (tlWarehouse) {
+        if (typeof tlWarehouse === 'string') {
+          const originalRef = findOriginalReference('app.trace_location.warehouse', tlWarehouse);
+          if (originalRef) {
+            traceLocationValue.warehouse = createReference(originalRef);
+          } else {
+            const matchedWarehouse = Object.entries(definedWarehouses).find(([, w]) => w.name === tlWarehouse);
+            if (matchedWarehouse) {
+              traceLocationValue.warehouse = createReference(matchedWarehouse[0]);
+            } else {
+              traceLocationValue.warehouse = tlWarehouse;
+            }
+          }
+        } else {
+          const whName = tlWarehouse.name;
+          const matchedWarehouse = Object.entries(definedWarehouses).find(([, w]) => w.name === whName);
+          if (matchedWarehouse) {
+            traceLocationValue.warehouse = createReference(matchedWarehouse[0]);
+          } else {
+            traceLocationValue.warehouse = tlWarehouse;
+          }
+        }
+      }
+      
+      yamlConfig.app.trace_location = traceLocationValue;
+    }
+
+    // Format monitoring
+    if (config.app.monitoring) {
+      const monitoringValue: Record<string, any> = {};
+      if (config.app.monitoring.sample_rate !== undefined) {
+        monitoringValue.sample_rate = config.app.monitoring.sample_rate;
+      }
+      if (config.app.monitoring.scorers && config.app.monitoring.scorers.length > 0) {
+        monitoringValue.scorers = config.app.monitoring.scorers;
+      }
+      if (config.app.monitoring.guidelines_sample_rate !== undefined) {
+        monitoringValue.guidelines_sample_rate = config.app.monitoring.guidelines_sample_rate;
+      }
+      if (config.app.monitoring.guidelines && config.app.monitoring.guidelines.length > 0) {
+        monitoringValue.guidelines = config.app.monitoring.guidelines;
+      }
+      yamlConfig.app.monitoring = monitoringValue;
+    }
+  }
+
+  // Evaluation section
+  if (config.evaluation) {
+    const definedLLMs = config.resources?.llms || {};
+    const definedSchemas = config.schemas || {};
+    
+    yamlConfig.evaluation = {
+      model: formatModelReference(config.evaluation.model, definedLLMs, 'evaluation.model'),
+      table: {
+        ...(config.evaluation.table.schema && { 
+          schema: formatSchemaReference(config.evaluation.table.schema, definedSchemas, 'evaluation.table.schema') 
+        }),
+        ...(config.evaluation.table.name && { name: config.evaluation.table.name }),
+      },
+      num_evals: config.evaluation.num_evals,
+      ...(config.evaluation.replace !== undefined && { replace: config.evaluation.replace }),
+      ...(config.evaluation.agent_description && { agent_description: config.evaluation.agent_description }),
+      ...(config.evaluation.question_guidelines && { question_guidelines: config.evaluation.question_guidelines }),
+      ...(config.evaluation.custom_inputs && Object.keys(config.evaluation.custom_inputs).length > 0 && { 
+        custom_inputs: config.evaluation.custom_inputs 
+      }),
+      ...(config.evaluation.guidelines && config.evaluation.guidelines.length > 0 && { 
+        guidelines: config.evaluation.guidelines 
+      }),
+    };
   }
 
   // Generate YAML string

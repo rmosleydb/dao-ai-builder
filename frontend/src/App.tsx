@@ -7,7 +7,7 @@ import Header from './components/layout/Header';
 import NotificationBar from './components/ui/NotificationBar';
 import ResizableDivider from './components/ui/ResizableDivider';
 
-export type ActiveSection = 'overview' | 'variables' | 'service_principals' | 'schemas' | 'resources' | 'retrievers' | 'tools' | 'guardrails' | 'middleware' | 'memory' | 'prompts' | 'agents' | 'app';
+export type ActiveSection = 'overview' | 'variables' | 'service_principals' | 'schemas' | 'resources' | 'retrievers' | 'tools' | 'guardrails' | 'middleware' | 'memory' | 'prompts' | 'agents' | 'app' | 'evaluation';
 
 // Min/max widths for panels
 const MIN_PREVIEW_WIDTH = 300;

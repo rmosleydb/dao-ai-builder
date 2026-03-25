@@ -12,6 +12,7 @@ import MemorySection from '../sections/MemorySection';
 import PromptsSection from '../sections/PromptsSection';
 import AgentsSection from '../sections/AgentsSection';
 import AppConfigSection from '../sections/AppConfigSection';
+import EvaluationSection from '../sections/EvaluationSection';
 
 interface ConfigPanelProps {
   activeSection: ActiveSection;
@@ -47,6 +48,8 @@ export default function ConfigPanel({ activeSection, onNavigate }: ConfigPanelPr
         return <AgentsSection />;
       case 'app':
         return <AppConfigSection />;
+      case 'evaluation':
+        return <EvaluationSection />;
       default:
         return null;
     }

@@ -13,7 +13,8 @@ import {
   LayoutDashboard,
   Search,
   UserCheck,
-  Layers
+  Layers,
+  FlaskConical
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { ActiveSection } from '@/App';
@@ -48,6 +49,7 @@ const navItems: NavItem[] = [
   { id: 'prompts', label: 'Prompts', icon: FileText, description: 'MLflow prompts' },
   { id: 'agents', label: 'Agents', icon: Bot, description: 'AI agents', required: true },
   { id: 'app', label: 'Application', icon: Settings, description: 'App settings & orchestration', required: true },
+  { id: 'evaluation', label: 'Evaluation', icon: FlaskConical, description: 'Offline evaluation' },
 ];
 
 export default function Sidebar({ activeSection, onSectionChange, config }: SidebarProps) {
@@ -98,6 +100,8 @@ export default function Sidebar({ activeSection, onSectionChange, config }: Side
         return Object.keys(config.agents || {}).length;
       case 'app':
         return config.app?.name ? 1 : 0;
+      case 'evaluation':
+        return config.evaluation ? 1 : 0;
       default:
         return 0;
     }

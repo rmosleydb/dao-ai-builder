@@ -1097,30 +1097,27 @@ function GenieRoomsPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
   const handleEdit = (key: string) => {
     scrollToAsset(key);
     const room = genieRooms[key];
-    const spaceIdDisplay = getVariableDisplayValue(room.space_id);
+    const spaceIdDisplay = room.space_id ? getVariableDisplayValue(room.space_id) : '';
     
     // Determine source type and extract appropriate values
     let source: SpaceIdSource = 'manual';
     let spaceIdValue = '';
     let variableName = '';
     
-    if (typeof room.space_id === 'string') {
-      // String value - check if it's a variable reference (starts with *)
+    if (!room.space_id) {
+      source = 'manual';
+    } else if (typeof room.space_id === 'string') {
       if (safeStartsWith(room.space_id, '*')) {
         source = 'variable';
         variableName = room.space_id.substring(1);
       } else {
-        // Check if it's in the list of available genie spaces
         const isInList = genieSpaces?.some(s => s.space_id === room.space_id);
         source = isInList ? 'select' : 'manual';
         spaceIdValue = room.space_id;
       }
     } else if (typeof room.space_id === 'object' && room.space_id !== null) {
       const obj = room.space_id as unknown as Record<string, unknown>;
-      // Env or secret variable object - treat as manual with the display value
-      // The env/secret object will be preserved when saving
       if ('env' in obj) {
-        // Environment variable - use default_value if available, otherwise use env var notation
         source = 'manual';
         spaceIdValue = obj.default_value !== undefined ? String(obj.default_value) : spaceIdDisplay;
       } else if ('secret' in obj) {
@@ -1164,8 +1161,8 @@ function GenieRoomsPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
   };
 
   const handleSave = () => {
-    // Determine space_id value based on source
-    let spaceIdValue = formData.space_id;
+    // Determine space_id value based on source (optional - name-only is valid)
+    let spaceIdValue: string | undefined = formData.space_id || undefined;
     if (spaceIdSource === 'variable' && formData.space_id_variable) {
       spaceIdValue = `*${formData.space_id_variable}`;
     }
@@ -1173,7 +1170,7 @@ function GenieRoomsPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
     const genieRoom: GenieRoomModel = {
       name: formData.name,
       description: formData.description || undefined,
-      space_id: spaceIdValue,
+      ...(spaceIdValue && { space_id: spaceIdValue }),
       on_behalf_of_user: formData.on_behalf_of_user,
     };
     
@@ -1257,7 +1254,7 @@ function GenieRoomsPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
                 <div>
                   <p className="font-medium text-slate-200">{key}</p>
                   <p className="text-xs text-slate-500">
-                    {room.name} • Space ID: {getVariableDisplayValue(room.space_id).substring(0, 12)}...
+                    {room.name}{room.space_id ? ` • Space ID: ${getVariableDisplayValue(room.space_id).substring(0, 12)}...` : ' (name only)'}
                   </p>
                 </div>
               </div>
@@ -1489,9 +1486,6 @@ function GenieRoomsPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
               disabled={
                 !formData.refName || 
                 !formData.name || 
-                (spaceIdSource === 'select' && !formData.space_id) ||
-                (spaceIdSource === 'manual' && !formData.space_id) ||
-                (spaceIdSource === 'variable' && !formData.space_id_variable) ||
                 isRefNameDuplicate(formData.refName, config, editingKey)
               }
             >
@@ -1553,7 +1547,9 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
     let envName = '';
     let envDefault = '';
     
-    if (typeof wh.warehouse_id === 'object' && wh.warehouse_id !== null) {
+    if (!wh.warehouse_id) {
+      source = 'manual';
+    } else if (typeof wh.warehouse_id === 'object' && wh.warehouse_id !== null) {
       const obj = wh.warehouse_id as unknown as Record<string, unknown>;
       if ('env' in obj && typeof obj.env === 'string') {
         source = 'env';
@@ -1604,8 +1600,8 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
   };
 
   const handleSave = () => {
-    // Determine the final warehouse_id value
-    let finalWarehouseId: WarehouseModel['warehouse_id'] = formData.warehouse_id;
+    // Determine the final warehouse_id value (optional - name-only is valid)
+    let finalWarehouseId: WarehouseModel['warehouse_id'] | undefined = formData.warehouse_id || undefined;
     if (warehouseIdSource === 'variable' && formData.warehouse_id_variable) {
       finalWarehouseId = `__REF__${formData.warehouse_id_variable}`;
     } else if (warehouseIdSource === 'env' && formData.warehouse_id_env) {
@@ -1619,7 +1615,7 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
     const warehouse: WarehouseModel = {
       name: formData.name,
       description: formData.description || undefined,
-      warehouse_id: finalWarehouseId,
+      ...(finalWarehouseId && { warehouse_id: finalWarehouseId }),
       on_behalf_of_user: formData.on_behalf_of_user,
     };
     
@@ -1713,22 +1709,27 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
       {Object.keys(warehouses).length > 0 && (
         <div className="space-y-2 mb-4">
           {Object.entries(warehouses).map(([key, wh]) => {
-            const isEnvVar = typeof wh.warehouse_id === 'object' && wh.warehouse_id !== null && 'env' in (wh.warehouse_id as unknown as Record<string, unknown>);
-            const warehouseIdStr = safeString(wh.warehouse_id);
-            const isVariableRef = safeStartsWith(warehouseIdStr, '__REF__');
-            let displayId: string;
-            let displayLabel: string;
-            if (isEnvVar) {
-              const envObj = wh.warehouse_id as unknown as Record<string, unknown>;
-              displayId = `$${envObj.env}`;
-              displayLabel = 'Env: ';
-            } else if (isVariableRef) {
-              displayId = `$${warehouseIdStr.substring(7)}`;
-              displayLabel = 'Var: ';
+            let displayId = '';
+            let displayLabel = '';
+            if (!wh.warehouse_id) {
+              displayLabel = '';
+              displayId = '(name only)';
             } else {
-              const resolved = getVariableDisplayValue(wh.warehouse_id);
-              displayId = resolved ? `${resolved.substring(0, 12)}...` : '';
-              displayLabel = 'ID: ';
+              const isEnvVar = typeof wh.warehouse_id === 'object' && wh.warehouse_id !== null && 'env' in (wh.warehouse_id as unknown as Record<string, unknown>);
+              const warehouseIdStr = safeString(wh.warehouse_id);
+              const isVariableRef = safeStartsWith(warehouseIdStr, '__REF__');
+              if (isEnvVar) {
+                const envObj = wh.warehouse_id as unknown as Record<string, unknown>;
+                displayId = `$${envObj.env}`;
+                displayLabel = 'Env: ';
+              } else if (isVariableRef) {
+                displayId = `$${warehouseIdStr.substring(7)}`;
+                displayLabel = 'Var: ';
+              } else {
+                const resolved = getVariableDisplayValue(wh.warehouse_id);
+                displayId = resolved ? `${resolved.substring(0, 12)}...` : '';
+                displayLabel = 'ID: ';
+              }
             }
             return (
               <div 
@@ -1741,7 +1742,7 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
                   <div>
                     <p className="font-medium text-slate-200">{key}</p>
                     <p className="text-xs text-slate-500">
-                      {wh.name} • {displayLabel}{displayId}
+                      {wh.name}{displayLabel || displayId ? ` • ${displayLabel}${displayId}` : ''}
                     </p>
                   </div>
                 </div>
@@ -2001,10 +2002,6 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
               disabled={
                 !formData.refName || 
                 !formData.name || 
-                (warehouseIdSource === 'select' && !formData.warehouse_id) ||
-                (warehouseIdSource === 'manual' && !formData.warehouse_id) ||
-                (warehouseIdSource === 'variable' && !formData.warehouse_id_variable) ||
-                (warehouseIdSource === 'env' && !formData.warehouse_id_env) ||
                 isRefNameDuplicate(formData.refName, config, editingKey)
               }
             >

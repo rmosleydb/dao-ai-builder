@@ -128,7 +128,7 @@ export interface GenieRoomModel {
   on_behalf_of_user?: boolean;
   name?: string;  // Optional - auto-populated from GenieSpace.title if not provided
   description?: string;
-  space_id: VariableValue;  // Can be string or variable reference (env, secret, etc.)
+  space_id?: VariableValue;  // Optional - can configure by name only. Can be string or variable reference (env, secret, etc.)
   warehouse?: WarehouseModel | string;  // NOTE: computed @property in Python, not serialized to YAML
   // Authentication fields
   service_principal?: ServicePrincipalModel | string;
@@ -146,9 +146,9 @@ export interface FunctionModel {
 
 export interface WarehouseModel {
   on_behalf_of_user?: boolean;
-  name?: string;  // Optional - auto-populated from warehouse API if not provided
+  name?: string;  // Optional - can configure by name only (resolved via warehouse API)
   description?: string;
-  warehouse_id: VariableValue;
+  warehouse_id?: VariableValue;  // Optional - can configure by name only
   // Authentication fields
   service_principal?: ServicePrincipalModel | string;
   client_id?: VariableValue;
@@ -410,13 +410,22 @@ export interface HumanInTheLoopModel {
   allowed_decisions?: HumanInTheLoopDecision[];
 }
 
+export type GuardrailMode = 'llm_judge' | 'scorer';
+
 export interface GuardrailModel {
   name: string;
-  model: LLMModel;
-  prompt: string;
+  // LLM Judge mode fields (provide model + prompt)
+  model?: LLMModel;
+  prompt?: string;
+  // Scorer mode fields (provide scorer, optionally scorer_args + hub)
+  scorer?: string;
+  scorer_args?: Record<string, any>;
+  hub?: string;
+  // Common fields
   num_retries?: number;
-  fail_open?: boolean;
+  fail_on_error?: boolean;
   max_context_length?: number;
+  apply_to?: 'input' | 'output' | 'both';
 }
 
 export interface MiddlewareModel {
@@ -465,7 +474,7 @@ export interface AppPermissionModel {
 export interface SupervisorModel {
   model: LLMModel;
   tools?: ToolModel[];
-  prompt?: string;
+  prompt?: string | PromptModel;
   middleware?: MiddlewareModel[];
 }
 
@@ -527,6 +536,18 @@ export interface RegisteredModelModel {
   name: string;
 }
 
+export interface TraceLocationModel {
+  schema: SchemaModel;
+  warehouse: WarehouseModel | string;
+}
+
+export interface MonitoringModel {
+  sample_rate?: number;
+  scorers?: (string | GuardrailModel)[];
+  guidelines?: GuidelineModel[];
+  guidelines_sample_rate?: number;
+}
+
 export interface AppModel {
   name: string;
   description?: string;
@@ -534,6 +555,8 @@ export interface AppModel {
   service_principal?: ServicePrincipalModel | string;  // Can be inline or reference
   registered_model: RegisteredModelModel;
   endpoint_name?: string;
+  trace_location?: TraceLocationModel;
+  monitoring?: MonitoringModel;
   tags?: Record<string, any>;
   scale_to_zero?: boolean;
   environment_vars?: Record<string, any>;
@@ -575,6 +598,7 @@ export interface EvaluationModel {
   model: LLMModel;
   table: TableModel;
   num_evals: number;
+  replace?: boolean;
   agent_description?: string;
   question_guidelines?: string;
   custom_inputs?: Record<string, any>;
