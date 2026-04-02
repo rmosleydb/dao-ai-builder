@@ -1312,6 +1312,202 @@ def list_registered_models():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/uc/model-config', methods=['GET'])
+def load_model_config():
+    """Load the model_config YAML from a UC-registered dao-ai agent.
+
+    Resolves the Champion alias and downloads the model_config artifact,
+    returning the raw YAML string for import into the builder UI.
+
+    Query params:
+    - model_name: Full UC model name (catalog.schema.model_name) (required)
+    """
+    model_name = request.args.get('model_name')
+    if not model_name:
+        return jsonify({'error': 'model_name parameter required'}), 400
+
+    try:
+        import mlflow
+        import tempfile
+        import os as os_module
+
+        host, _ = get_databricks_host_with_source()
+        token, _ = get_databricks_token_with_source()
+
+        if not host:
+            return jsonify({'error': 'No Databricks workspace URL configured'}), 400
+        if not token:
+            return jsonify({'error': 'No authentication token available'}), 401
+
+        orig_env = {
+            'DATABRICKS_HOST': os_module.environ.get('DATABRICKS_HOST'),
+            'DATABRICKS_TOKEN': os_module.environ.get('DATABRICKS_TOKEN'),
+            'MLFLOW_TRACKING_TOKEN': os_module.environ.get('MLFLOW_TRACKING_TOKEN'),
+        }
+
+        try:
+            os_module.environ['DATABRICKS_HOST'] = normalize_host(host)
+            os_module.environ['DATABRICKS_TOKEN'] = token
+            os_module.environ['MLFLOW_TRACKING_TOKEN'] = token
+
+            mlflow.set_tracking_uri("databricks")
+            mlflow.set_registry_uri("databricks-uc")
+
+            # Resolve Champion alias to a version
+            client = mlflow.MlflowClient()
+            mv = client.get_model_version_by_alias(model_name, "Champion")
+            version = mv.version
+
+            # Download model artifact and read model_config.yaml
+            model_uri = f"models:/{model_name}/{version}"
+            local_path = mlflow.artifacts.download_artifacts(model_uri)
+
+            config_path = os_module.path.join(local_path, "model_config.yaml")
+            if not os_module.path.exists(config_path):
+                # Try .yml extension as fallback
+                config_path = os_module.path.join(local_path, "model_config.yml")
+            if not os_module.path.exists(config_path):
+                return jsonify({'error': 'model_config.yaml not found in model artifact'}), 404
+
+            with open(config_path, 'r') as f:
+                yaml_content = f.read()
+
+            log('info', f"Loaded model config for {model_name} version {version}")
+            return jsonify({'yaml': yaml_content, 'model_name': model_name, 'version': version})
+
+        finally:
+            for var, val in orig_env.items():
+                if val is not None:
+                    os_module.environ[var] = val
+                elif var in os_module.environ:
+                    del os_module.environ[var]
+
+    except Exception as e:
+        log('error', f"Error loading model config for {model_name}: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/uc/register-model', methods=['POST'])
+def register_model():
+    """Register a dao-ai agent config to Unity Catalog without deploying an endpoint.
+
+    Calls dao_ai's create_agent() to log the model to MLflow and register it
+    in UC as a versioned artifact. No Model Serving endpoint or App is created.
+
+    JSON body:
+    - config: The agent configuration as a dictionary (required)
+    - credentials: Optional credential configuration (same schema as /api/deploy/quick)
+        - type: 'app' | 'obo' | 'manual_sp' | 'manual_pat'
+        - pat: Required for manual_pat
+        - client_id: Required for manual_sp
+        - client_secret: Required for manual_sp
+
+    Returns the registered model name and version number.
+    """
+    import yaml
+    import tempfile
+    import os as os_module
+
+    data = request.get_json() or {}
+    config = data.get('config')
+    credentials = data.get('credentials', {})
+
+    if not config:
+        return jsonify({'error': 'config is required'}), 400
+
+    host, _ = get_databricks_host_with_source()
+    cred_type = credentials.get('type', 'obo')
+    token = None
+    client_id = None
+    client_secret = None
+
+    if cred_type == 'manual_pat':
+        token = credentials.get('pat')
+        if not token:
+            return jsonify({'error': 'pat is required for manual_pat credential type'}), 400
+    elif cred_type == 'manual_sp':
+        client_id = credentials.get('client_id')
+        client_secret = credentials.get('client_secret')
+        if not client_id or not client_secret:
+            return jsonify({'error': 'client_id and client_secret are required for manual_sp credential type'}), 400
+    elif cred_type == 'app':
+        client_id = os.environ.get('DATABRICKS_CLIENT_ID')
+        client_secret = os.environ.get('DATABRICKS_CLIENT_SECRET')
+        if not client_id or not client_secret:
+            return jsonify({'error': 'Application service principal not configured'}), 400
+    else:  # obo or default
+        token, token_source = get_databricks_token_with_source()
+        if not token:
+            client_id = os.environ.get('DATABRICKS_CLIENT_ID')
+            client_secret = os.environ.get('DATABRICKS_CLIENT_SECRET')
+            if not client_id or not client_secret:
+                return jsonify({'error': 'No credentials available for registration'}), 401
+
+    if not host:
+        return jsonify({'error': 'No Databricks workspace URL configured'}), 400
+
+    orig_env = {
+        'DATABRICKS_HOST': os_module.environ.get('DATABRICKS_HOST'),
+        'DATABRICKS_TOKEN': os_module.environ.get('DATABRICKS_TOKEN'),
+        'DATABRICKS_CLIENT_ID': os_module.environ.get('DATABRICKS_CLIENT_ID'),
+        'DATABRICKS_CLIENT_SECRET': os_module.environ.get('DATABRICKS_CLIENT_SECRET'),
+        'MLFLOW_TRACKING_TOKEN': os_module.environ.get('MLFLOW_TRACKING_TOKEN'),
+    }
+
+    config_path = None
+    try:
+        from dao_ai.config import AppConfig
+        import mlflow
+
+        # Write config dict to temp YAML file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml.dump(config, f)
+            config_path = f.name
+
+        # Clear conflicting auth then set resolved credentials
+        for var in ['DATABRICKS_TOKEN', 'DATABRICKS_CLIENT_ID', 'DATABRICKS_CLIENT_SECRET', 'MLFLOW_TRACKING_TOKEN']:
+            if var in os_module.environ:
+                del os_module.environ[var]
+
+        os_module.environ['DATABRICKS_HOST'] = normalize_host(host)
+        if token:
+            os_module.environ['DATABRICKS_TOKEN'] = token
+            os_module.environ['MLFLOW_TRACKING_TOKEN'] = token
+        elif client_id and client_secret:
+            os_module.environ['DATABRICKS_CLIENT_ID'] = client_id
+            os_module.environ['DATABRICKS_CLIENT_SECRET'] = client_secret
+
+        mlflow.set_tracking_uri("databricks")
+        mlflow.set_registry_uri("databricks-uc")
+
+        app_config = AppConfig.from_file(config_path)
+        app_config.create_agent()
+
+        registered_model_name = app_config.app.registered_model.full_name
+        client = mlflow.MlflowClient()
+        mv = client.get_model_version_by_alias(registered_model_name, "Champion")
+
+        log('info', f"Registered {registered_model_name} version {mv.version}")
+        return jsonify({
+            'model_name': registered_model_name,
+            'version': mv.version,
+            'alias': 'Champion',
+        })
+
+    except Exception as e:
+        log('error', f"Error registering model: {e}")
+        return jsonify({'error': str(e)}), 500
+
+    finally:
+        if config_path and os_module.path.exists(config_path):
+            os_module.remove(config_path)
+        for var, val in orig_env.items():
+            if val is not None:
+                os_module.environ[var] = val
+            elif var in os_module.environ:
+                del os_module.environ[var]
+
+
 @app.route('/api/uc/prompts', methods=['GET', 'POST'])
 def list_prompts():
     """List MLflow prompts in a catalog.schema using MLflow SDK.
